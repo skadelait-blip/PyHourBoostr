@@ -1,0 +1,4 @@
+requests>=2.28.0
+colorama>=0.4.6
+pycryptodomex>=3.18.0
+PyQt6>=6.5.0

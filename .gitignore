@@ -1,0 +1,86 @@
+# === Credentials & Account Data (NEVER COMMIT) ===
+Settings.json
+**/Settings.json
+HourBoostr/Settings.json
+Sentryfiles/
+**/Sentryfiles/
+Sentryfiles/**/*.sentry
+**/*.sentry
+
+# === Logs ===
+Logs/
+**/Logs/
+Logs/**/*.txt
+
+# === Python ===
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.egg
+
+# === Virtual environments ===
+venv/
+.venv/
+env/
+.env/
+
+# === IDE / Editor ===
+.vs/
+**/.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# === Build artifacts ===
+bin/
+obj/
+**/bin/
+**/obj/
+packages/
+**/packages/
+*.nupkg
+
+# === OS files ===
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# === Project specific ===
+DontInclude/
+media/
+**/media/
+
+# === C# / .NET original source (not part of Python port) ===
+HourBoostr/HourBoostr/
+HourBoostr/Settings/
+HourBoostr/HourBoostr.sln
+SingleBoostr/
+Bubbles.json
+donation.json
+gameList.xml
+version.json
+version.txt
