@@ -42,6 +42,7 @@ class BotWorker(QThread):
     error_signal = pyqtSignal(str, str)  # account_name, error
     auth_signal = pyqtSignal(str, str)  # account_name, auth_type (email/2fa)
     success_signal = pyqtSignal(str)  # account_name
+    games_imported = pyqtSignal(str, list)  # account_name, games list
     
     def __init__(self, account_settings: AccountSettings):
         super().__init__()
@@ -106,12 +107,52 @@ class BotWorker(QThread):
         # Verify session with a small delay
         time.sleep(1)
         try:
-            if self.steam.client.web.verify_cookies():
-                self.log_signal.emit(username, "Session verified ✓")
+            sess = self.steam.client.get_web_session()
+            if sess:
+                self.log_signal.emit(username, "Web session ready ✓")
             else:
-                self.log_signal.emit(username, "Session needs refresh")
+                self.log_signal.emit(username, "Web session not available")
         except Exception as e:
             self.log_signal.emit(username, f"Session check: {e}")
+        
+        # Auto-import games if none configured
+        if not self.account_settings.games:
+            import gevent
+            gevent.spawn(self._import_games_via_session, username)
+    
+    def _import_games_via_session(self, username: str):
+        """Import games using authenticated web session (after login)"""
+        try:
+            sess = self.steam.client.get_web_session()
+            if not sess:
+                self.log_signal.emit(username, "Cannot import games: no web session")
+                return
+            steamid = self.steam.client.steam_id.as_64()
+            url = f"https://steamcommunity.com/profiles/{steamid}/games/?tab=all&xml=1"
+            self.log_signal.emit(username, "Fetching game library...")
+            resp = sess.get(url, timeout=15)
+            raw = resp.content
+            if raw.lstrip()[:5] != b"<?xml":
+                self.log_signal.emit(username, "Games feed returned HTML even with session")
+                return
+            root = ET.fromstring(raw.decode("utf-8", errors="replace"))
+            games_elem = root.find("games")
+            if games_elem is None:
+                self.log_signal.emit(username, "No games found in library")
+                return
+            games = []
+            for game in games_elem.findall("game"):
+                appid_elem = game.find("appID")
+                name_elem = game.find("name")
+                if appid_elem is not None and appid_elem.text:
+                    appid = int(appid_elem.text.strip())
+                    name = name_elem.text.strip() if name_elem is not None and name_elem.text else f"Unknown ({appid})"
+                    games.append({"appid": appid, "name": name})
+            if games:
+                self.games_imported.emit(username, sorted(games, key=lambda g: g["name"].lower()))
+                self.log_signal.emit(username, f"✓ Imported {len(games)} games from library")
+        except Exception as e:
+            self.log_signal.emit(username, f"Failed to import games: {e}")
     
     def _on_login_key(self, login_key: str):
         """Handle login key received"""
@@ -278,10 +319,27 @@ class AccountDialog(QDialog):
 
             games = self._fetch_owned_games_xml(steamid)
             if games == "auth":
+                btn = QMessageBox.question(
+                    self, "Import Games",
+                    "Steam no longer allows viewing game libraries without login.\n\n"
+                    "Options:\n"
+                    "  • Save account & start bot — games will import automatically\n"
+                    "     after login (no key needed)\n"
+                    "  • Enter Steam Web API key — import immediately\n\n"
+                    "Try importing after bot login?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if btn == QMessageBox.StandardButton.Yes:
+                    QMessageBox.information(
+                        self, "Auto-Import",
+                        "Save this account and start the bot.\n"
+                        "After a successful login, games will be\n"
+                        "imported automatically."
+                    )
+                    return
                 api_key = self._prompt_api_key(
-                    "This profile's game library is private.\n"
-                    "Steam now requires authentication to view game lists.\n"
-                    "Enter your Steam Web API key to import games:"
+                    "Enter your Steam Web API key for immediate import:"
                 )
                 if not api_key:
                     return
@@ -1023,6 +1081,7 @@ class MainWindow(QMainWindow):
             worker.error_signal.connect(self.on_bot_error)
             worker.auth_signal.connect(self.on_auth_needed)
             worker.success_signal.connect(self.on_success)
+            worker.games_imported.connect(self.on_games_imported)
             
             self.bot_workers[username] = worker
             worker.start()
@@ -1105,6 +1164,20 @@ class MainWindow(QMainWindow):
                     save_settings(self.settings)
                     self.log_message("System", f"Saved login key for {username}")
                     break
+    
+    def on_games_imported(self, username: str, games: list):
+        """Handle games imported after login"""
+        for account in self.settings.accounts:
+            if account.details.username == username:
+                game_ids = [g["appid"] for g in games]
+                account.games = game_ids
+                save_settings(self.settings)
+                self.log_message("System", f"Auto-imported {len(game_ids)} games for {username}")
+                # Refresh table
+                for row in range(self.account_table.rowCount()):
+                    if self.account_table.item(row, 0).text() == username:
+                        self.account_table.item(row, 1).setText(", ".join(str(x) for x in game_ids))
+                break
     
     def _update_account_status(self, status: str):
         """Update status in table for current row"""
