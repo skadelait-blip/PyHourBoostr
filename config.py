@@ -36,4 +36,5 @@ class Settings:
     """Application settings"""
     check_for_updates: bool = True
     hide_to_tray: bool = True
+    steam_api_key: str = ""
     accounts: List[AccountSettings] = field(default_factory=list)

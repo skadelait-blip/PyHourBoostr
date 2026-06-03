@@ -5,6 +5,9 @@ Using PyQt6
 import sys
 import os
 import json
+import re
+import urllib.request
+import urllib.parse
 from typing import Optional
 from datetime import datetime
 
@@ -15,7 +18,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QDialog, QDialogButtonBox, QTabWidget, QListWidget,
     QListWidgetItem, QProgressBar, QStatusBar, QMenuBar, QMenu,
     QFrame, QSplitter, QComboBox, QSystemTrayIcon, QProgressDialog,
-    QInputDialog
+    QInputDialog, QToolButton
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QAction, QIcon, QColor, QFont, QPixmap, QPainter, QBrush
@@ -178,9 +181,16 @@ class AccountDialog(QDialog):
         layout.addRow("Password:", self.password_edit)
         
         # Games
+        games_layout = QHBoxLayout()
         self.games_edit = QLineEdit()
         self.games_edit.setText(", ".join(map(str, self.account.games)))
-        layout.addRow("Games (App IDs):", self.games_edit)
+        self.games_edit.setPlaceholderText("730, 10, 440  (comma or space separated)")
+        games_layout.addWidget(self.games_edit)
+        import_btn = QPushButton("📦 Import")
+        import_btn.setToolTip("Import games from Steam library")
+        import_btn.clicked.connect(self._import_games)
+        games_layout.addWidget(import_btn)
+        layout.addRow("Games (App IDs):", games_layout)
         
         # Options
         options_group = QGroupBox("Options")
@@ -227,9 +237,11 @@ class AccountDialog(QDialog):
         self.account.details.username = self.username_edit.text()
         self.account.details.password = self.password_edit.text()
         
-        # Parse games
+        # Parse games: comma, space, or mixed
         games_text = self.games_edit.text()
-        self.account.games = [int(g.strip()) for g in games_text.split(",") if g.strip().isdigit()]
+        self.account.games = list(dict.fromkeys(
+            int(g) for g in re.split(r'[,\s]+', games_text.strip()) if g.isdigit()
+        ))
         
         # Options
         self.account.show_online_status = self.online_check.isChecked()
@@ -240,6 +252,168 @@ class AccountDialog(QDialog):
         self.account.chat_response = self.chat_edit.text()
         
         return self.account
+    
+    def _import_games(self):
+        """Import games from Steam library via Web API"""
+        from endpoints import STEAM_RESOLVE_VANITY, STEAM_GET_OWNED_GAMES
+        
+        api_key, ok = QInputDialog.getText(
+            self, "Steam Web API Key",
+            "Paste your Steam Web API key:\n(Get one at https://steamcommunity.com/dev/apikey)",
+            text=self._get_api_key()
+        )
+        if not ok or not api_key.strip():
+            return
+        api_key = api_key.strip()
+        
+        profile_url, ok = QInputDialog.getText(
+            self, "Steam Profile",
+            "Paste your Steam profile URL or SteamID64:\n"
+            "Examples:\n"
+            "  https://steamcommunity.com/id/yourname\n"
+            "  https://steamcommunity.com/profiles/7656119...\n"
+            "  76561197960287930"
+        )
+        if not ok or not profile_url.strip():
+            return
+        
+        try:
+            steamid = self._resolve_steamid(profile_url.strip(), api_key)
+            if not steamid:
+                QMessageBox.warning(self, "Error", "Could not resolve Steam ID from that URL")
+                return
+            
+            games = self._fetch_owned_games(steamid, api_key)
+            if not games:
+                QMessageBox.information(self, "No Games", "No games found or library is private")
+                return
+            
+            self._show_game_picker(games)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to import games:\n{e}")
+    
+    def _get_api_key(self):
+        """Get Steam API key from parent MainWindow settings"""
+        parent = self.parent()
+        if parent and hasattr(parent, 'settings') and parent.settings:
+            return parent.settings.steam_api_key
+        return ""
+    
+    def _resolve_steamid(self, input_str: str, api_key: str) -> Optional[str]:
+        """Resolve a profile URL or raw SteamID to steamID64"""
+        # Already a steamID64 (17 digits)
+        m = re.match(r'^(\d{17})$', input_str)
+        if m:
+            return m.group(1)
+        
+        # https://steamcommunity.com/profiles/76561197960287930
+        m = re.search(r'steamcommunity\.com/profiles/(\d{17})', input_str)
+        if m:
+            return m.group(1)
+        
+        # https://steamcommunity.com/id/customname
+        m = re.search(r'steamcommunity\.com/id/([a-zA-Z0-9_-]+)', input_str)
+        if m:
+            vanity = m.group(1)
+            url = f"{STEAM_RESOLVE_VANITY}?key={api_key}&vanityurl={vanity}"
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            result = data.get('response', {})
+            if result.get('success') == 1:
+                return result.get('steamid')
+            return None
+        
+        return None
+    
+    def _fetch_owned_games(self, steamid: str, api_key: str) -> list:
+        """Fetch owned games from Steam library"""
+        url = f"{STEAM_GET_OWNED_GAMES}?key={api_key}&steamid={steamid}&include_appinfo=true&format=json"
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        games = data.get('response', {}).get('games', [])
+        return sorted(games, key=lambda g: g.get('name', '').lower())
+    
+    def _show_game_picker(self, games: list):
+        """Show dialog to select games to import"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Games to Import")
+        dialog.setMinimumSize(500, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        search_edit = QLineEdit()
+        search_edit.setPlaceholderText("Search games...")
+        layout.addWidget(search_edit)
+        
+        list_widget = QListWidget()
+        all_checkboxes = []
+        for game in games:
+            appid = game.get('appid')
+            name = game.get('name', f'Unknown ({appid})')
+            playtime = game.get('playtime_forever', 0)
+            hours = round(playtime / 60, 1)
+            item = QListWidgetItem(f"[{appid}] {name}  ({hours}h)")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, appid)
+            all_checkboxes.append(item)
+            list_widget.addItem(item)
+        
+        layout.addWidget(list_widget)
+        
+        # Filter
+        def on_search(text):
+            for i in range(list_widget.count()):
+                item = list_widget.item(i)
+                item.setHidden(text.lower() not in item.text().lower() if text else False)
+        search_edit.textChanged.connect(on_search)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        select_all_btn = QPushButton("Select All")
+        def select_all():
+            for item in all_checkboxes:
+                item.setCheckState(Qt.CheckState.Checked)
+        select_all_btn.clicked.connect(select_all)
+        btn_layout.addWidget(select_all_btn)
+        
+        deselect_all_btn = QPushButton("Deselect All")
+        def deselect_all():
+            for item in all_checkboxes:
+                item.setCheckState(Qt.CheckState.Unchecked)
+        deselect_all_btn.clicked.connect(deselect_all)
+        btn_layout.addWidget(deselect_all_btn)
+        
+        btn_layout.addStretch()
+        
+        ok_btn = QPushButton("Import Selected")
+        btn_layout.addWidget(ok_btn)
+        
+        cancel_btn = QPushButton("Cancel")
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+        
+        result_games = []
+        def accept():
+            nonlocal result_games
+            for item in all_checkboxes:
+                if item.checkState() == Qt.CheckState.Checked:
+                    result_games.append(item.data(Qt.ItemDataRole.UserRole))
+            dialog.accept()
+        ok_btn.clicked.connect(accept)
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted and result_games:
+            current = set(self.account.games)
+            merged = list(current | set(result_games))
+            self.games_edit.setText(", ".join(map(str, sorted(merged))))
+            
+            # Save API key to parent settings
+            parent = self.parent()
+            if parent and hasattr(parent, 'settings') and parent.settings:
+                parent.settings.steam_api_key = api_key
+                from settings_manager import save_settings
+                save_settings(parent.settings)
 
 
 class MainWindow(QMainWindow):

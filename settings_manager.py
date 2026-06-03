@@ -25,6 +25,7 @@ def get_settings() -> Optional[Settings]:
             json.dump({
                 "check_for_updates": True,
                 "hide_to_tray": True,
+                "steam_api_key": "",
                 "accounts": [
                     {"games": [730, 10]},
                     {"games": [730, 10]},
@@ -43,6 +44,7 @@ def get_settings() -> Optional[Settings]:
         settings = Settings()
         settings.check_for_updates = data.get('check_for_updates', True)
         settings.hide_to_tray = data.get('hide_to_tray', True)
+        settings.steam_api_key = data.get('steam_api_key', '')
         
         # Parse accounts
         for acc_data in data.get('accounts', []):
@@ -91,6 +93,7 @@ def save_settings(settings: Settings) -> bool:
     data = {
         "check_for_updates": settings.check_for_updates,
         "hide_to_tray": settings.hide_to_tray,
+        "steam_api_key": settings.steam_api_key,
         "accounts": []
     }
     

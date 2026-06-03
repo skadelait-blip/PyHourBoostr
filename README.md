@@ -170,7 +170,7 @@ python main.py
 ## 🧑‍💻 Авторы
 
 - **Ezzpify** — оригинальная идея и [C# реализация](https://github.com/Ezzpify/HourBoostr)
-- **skadelait-blip** — Python-порт (ValvePython, PyQt6, фиксы совместимости)
+- **3umukc** — Python-порт (ValvePython, PyQt6, фиксы совместимости)
 
 ---
 
