@@ -7,9 +7,11 @@ import time
 import threading
 from typing import Optional, List
 
-# Patch time.sleep to work with gevent (so it doesn't block the hub)
+# Patch time.sleep and socket/ssl to work with gevent (so IO doesn't block the hub)
 import gevent.monkey
 gevent.monkey.patch_time()
+gevent.monkey.patch_socket()
+gevent.monkey.patch_ssl()
 
 from steam.client import SteamClient
 from steam.enums import EResult
